@@ -29,26 +29,21 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api", router);
 app.use("/objects", express.static(path.join(process.cwd(), "uploads")));
 
-// Redirect root to the admin panel
-app.get("/", (_req, res) => {
-  res.redirect(301, "/admin");
-});
-
 const examDist = path.join(
   fileURLToPath(new URL(".", import.meta.url)),
-  "../../fellowship-exam/dist/public",
+  "../../fellowship-exam/dist",
 );
 
 if (fs.existsSync(examDist)) {
-  // Admin SPA
-  app.use("/admin", express.static(examDist, { index: false }));
-  app.use("/admin", (_req, res) => {
-    res.sendFile(path.join(examDist, "index.html"));
-  });
+  // Serve static files from the build directory
+  app.use(express.static(examDist));
 
-  // Public application form — same SPA, routed by the frontend
-  app.use("/apply", express.static(examDist, { index: false }));
-  app.use("/apply", (_req, res) => {
+  // Handle SPA routing: any non-API route serves index.html
+  app.get("/*", (req, res, next) => {
+    // Skip API and static objects
+    if (req.path.startsWith("/api") || req.path.startsWith("/objects")) {
+      return next();
+    }
     res.sendFile(path.join(examDist, "index.html"));
   });
 }

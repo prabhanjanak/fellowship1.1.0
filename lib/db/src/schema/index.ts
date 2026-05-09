@@ -11,3 +11,4 @@ export * from "./allocations";
 export * from "./application-forms";
 export * from "./seat-matrix";
 export * from "./payment-settings";
+export * from "./panels";

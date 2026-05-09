@@ -167,7 +167,19 @@ async function runStartupFixes() {
     logger.info("Created super admin saravanan@sankaraeye.com");
   }
 
-  // Fix 4: Aggressively update the July 2026 fellowship form to use the latest multi-specialty config
+  // Fix 4: Ensure the July 2026 Program and Form exist
+  let [prog] = await db.select().from(programsTable).where(ilike(programsTable.name, "%July 2026%"));
+  
+  if (!prog) {
+    [prog] = await db.insert(programsTable).values({
+      name: "Fellowship Program July 2026",
+      code: "FP-JUL-2026",
+      academicYear: "2026",
+      description: "Sankara Academy of Vision Fellowship Intake July 2026"
+    }).returning();
+    logger.info("Created missing July 2026 program");
+  }
+
   const [targetForm] = await db.select().from(applicationFormsTable).where(ilike(applicationFormsTable.title, "%July 2026%"));
   
   if (targetForm) {
@@ -176,20 +188,17 @@ async function runStartupFixes() {
       .where(eq(applicationFormsTable.id, targetForm.id));
     logger.info("Updated existing July 2026 fellowship form configuration");
   } else {
-    // Create it if it doesn't exist
-    const [prog] = await db.select().from(programsTable).where(ilike(programsTable.name, "%July 2026%"));
-    if (prog) {
-      await db.insert(applicationFormsTable).values({
-        programId: prog.id,
-        title: "Fellowship Program - July 2026",
-        description: "Sankara Academy of Vision Fellowship Program for July 2026 batch.",
-        isActive: true,
-        token: Math.random().toString(36).substring(2, 10).toUpperCase(),
-        sectionsConfig: DEFAULT_SECTIONS as any,
-        programName: prog.name,
-      });
-      logger.info("Created new July 2026 fellowship form with standard sections");
-    }
+    // Create it using the program we found or created
+    await db.insert(applicationFormsTable).values({
+      programId: prog.id,
+      title: "Fellowship Program - July 2026",
+      description: "Sankara Academy of Vision Fellowship Program for July 2026 batch.",
+      isActive: true,
+      token: "JULY2026",
+      sectionsConfig: DEFAULT_SECTIONS as any,
+      programName: prog.name,
+    });
+    logger.info("Created new July 2026 fellowship form with standard sections");
   }
 }
 

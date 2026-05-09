@@ -95,7 +95,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ThemeProvider>
-          <WouterRouter base={(import.meta.env.BASE_URL || "").replace(/\/$/, "")}>
+          <WouterRouter>
             <Switch>
               {/* Public Routes - NO Sidebar, NO Auth needed */}
               <Route path="/apply/:token">

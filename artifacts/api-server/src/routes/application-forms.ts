@@ -149,34 +149,82 @@ router.get(
       .where(eq(applicationSubmissionsTable.formId, formId))
       .orderBy(desc(applicationSubmissionsTable.submittedAt));
 
-    const rows = subs.map((s) => ({
-      "Submission ID": s.id,
-      "Status": s.status,
-      "Source": s.source ?? "internal",
-      "Ready for Review": (s.readyForReview ?? false) ? "Yes" : "No",
-      "Submitted At": s.submittedAt ? new Date(s.submittedAt).toLocaleString("en-IN") : "",
-      "Full Name": s.fullName,
-      "Email": s.email,
-      "Phone": s.phone ?? "",
-      "Date of Birth": s.dateOfBirth ?? "",
-      "Marital Status": s.maritalStatus ?? "",
-      "Permanent Address": s.permanentAddress ?? "",
-      "Specialization Applied": s.specialization ?? "",
-      "Center Preference": s.centerPreference ?? "",
-      "Referral Source": s.referralSource ?? "",
-      "Degree": s.degree ?? "",
-      "Medical College": s.medicalCollege ?? "",
-      "University": s.university ?? "",
-      "Medical Council Number": s.medicalCouncilNumber ?? "",
-      "Publications": s.publications ?? "",
-      "Presentations": s.presentations ?? "",
-      "LOR 1 URL": s.lor1Url ?? "",
-      "LOR 2 URL": s.lor2Url ?? "",
-      "Photo URL": s.photoUrl ?? "",
-      "Declaration Accepted": s.declarationAccepted ? "Yes" : "No",
-      "Payment URL": s.paymentUrl ?? "",
-      "Review Notes": s.reviewNotes ?? "",
-    }));
+    const rows = subs.map((s) => {
+      let specParsed: any = [];
+      try {
+        specParsed = JSON.parse(s.specialization ?? "[]");
+      } catch {
+        specParsed = s.specialization;
+      }
+      const specString = Array.isArray(specParsed) ? specParsed.join(", ") : (specParsed || "");
+
+      let cpParsed: Record<string, any> = {};
+      try {
+        cpParsed = JSON.parse(s.centerPreference ?? "{}");
+      } catch {
+        if (s.centerPreference) {
+          const mainSpec = Array.isArray(specParsed) ? specParsed[0] : specParsed;
+          if (mainSpec) cpParsed[mainSpec] = s.centerPreference;
+          else cpParsed["Center"] = s.centerPreference;
+        }
+      }
+
+      let caParsed: Record<string, any> = {};
+      try {
+        caParsed = JSON.parse(s.customAnswers ?? "{}");
+      } catch {}
+
+      const baseRow: Record<string, any> = {
+        "Submission ID": s.id,
+        "Timestamp": s.submittedAt ? new Date(s.submittedAt).toLocaleString("en-IN") : "",
+        "Name in Full (First Name, Middle Name, Last/Family Name)": s.fullName,
+        "E-mail (this would be the ID all communication would be shared on)": s.email,
+        "Mobile Number (only 10 digits)": s.phone ?? "",
+        "Date of Birth": s.dateOfBirth ?? "",
+        "Marital Status": s.maritalStatus ?? "",
+        "Permanent Address (including postal pin code)": s.permanentAddress ?? "",
+        "Select 1 option from the dropbox": specString,
+        "Cornea - Choose the preferred center": cpParsed["Cornea"] ? (Array.isArray(cpParsed["Cornea"]) ? cpParsed["Cornea"].join(", ") : cpParsed["Cornea"]) : "Not Applicable",
+        "Glaucoma - Choose the preferred center": cpParsed["Glaucoma"] ? (Array.isArray(cpParsed["Glaucoma"]) ? cpParsed["Glaucoma"].join(", ") : cpParsed["Glaucoma"]) : "Not Applicable",
+        "IOL - Choose the preferred center": cpParsed["IOL"] ? (Array.isArray(cpParsed["IOL"]) ? cpParsed["IOL"].join(", ") : cpParsed["IOL"]) : "Not Applicable",
+        "Medical Retina - Choose the preferred center": cpParsed["Medical Retina"] ? (Array.isArray(cpParsed["Medical Retina"]) ? cpParsed["Medical Retina"].join(", ") : cpParsed["Medical Retina"]) : "Not Applicable",
+        "Oculoplasty - Choose the preferred center": cpParsed["Oculoplasty"] ? (Array.isArray(cpParsed["Oculoplasty"]) ? cpParsed["Oculoplasty"].join(", ") : cpParsed["Oculoplasty"]) : "Not Applicable",
+        "Pediatric Ophthalmology - Choose the preferred center": cpParsed["Pediatric Ophthalmology"] ? (Array.isArray(cpParsed["Pediatric Ophthalmology"]) ? cpParsed["Pediatric Ophthalmology"].join(", ") : cpParsed["Pediatric Ophthalmology"]) : "Not Applicable",
+        "Phaco Refractive - Choose the preferred center": cpParsed["Phaco Refractive"] ? (Array.isArray(cpParsed["Phaco Refractive"]) ? cpParsed["Phaco Refractive"].join(", ") : cpParsed["Phaco Refractive"]) : "Not Applicable",
+        "Vitreo Retina - Choose the preferred center": cpParsed["Vitreo Retina"] ? (Array.isArray(cpParsed["Vitreo Retina"]) ? cpParsed["Vitreo Retina"].join(", ") : cpParsed["Vitreo Retina"]) : "Not Applicable"
+      };
+
+      // Add any other dynamically added specializations just in case
+      for (const [key, val] of Object.entries(cpParsed)) {
+        if (!["Cornea", "Glaucoma", "IOL", "Medical Retina", "Oculoplasty", "Pediatric Ophthalmology", "Phaco Refractive", "Vitreo Retina"].includes(key)) {
+          const valString = Array.isArray(val) ? val.join(", ") : val;
+          baseRow[`${key} - Choose the preferred center`] = valString;
+        }
+      }
+
+      baseRow["Where did you hear about this Fellowship?"] = s.referralSource ?? "";
+      baseRow["Degrees & Other Qualifications (Mention University name, passing month/year)"] = s.degree ?? "";
+      baseRow["Medical College Qualified From"] = s.medicalCollege ?? "";
+      baseRow["University from which Medical College is affiliated"] = s.university ?? "";
+      baseRow["Medical Council Registration Number (MCI)"] = s.medicalCouncilNumber ?? "";
+      baseRow["Publications"] = s.publications ?? "";
+      baseRow["Presentations"] = s.presentations ?? "";
+      baseRow["Letter of recommendation 1"] = s.lor1Url ?? "";
+      baseRow["Letter of recommendation 2"] = s.lor2Url ?? "";
+      baseRow["Passport size photograph"] = s.photoUrl ?? "";
+      baseRow["Transaction ID/ UTR No"] = s.paymentUrl ?? "";
+      baseRow["Status"] = s.status;
+      baseRow["Source"] = s.source ?? "internal";
+      baseRow["Review Notes"] = s.reviewNotes ?? "";
+
+      // Add any custom answers dynamically at the end
+      for (const [key, val] of Object.entries(caParsed)) {
+        const valString = Array.isArray(val) ? val.join(", ") : val;
+        baseRow[key] = valString;
+      }
+
+      return baseRow;
+    });
 
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(rows);
