@@ -19,6 +19,7 @@ import {
   applicationSubmissionsTable,
 } from "@workspace/db";
 import { requireAuth, requireRole } from "../middleware/auth";
+import { sendOfferLetterEmail } from "../lib/email";
 
 const router: Router = Router();
 
@@ -384,6 +385,52 @@ router.post("/candidates/bulk-delete", requireAuth, requireRole("super_admin", "
   if (!Array.isArray(ids) || ids.length === 0) { res.status(400).json({ error: "ids array required" }); return; }
   await cascadeDeleteCandidates(ids);
   res.json({ success: true, deleted: ids.length });
+});
+
+// Send formal offer letter email
+router.post("/candidates/:id/send-offer", requireAuth, requireRole("super_admin", "program_admin"), async (req, res) => {
+  const id = Number(req.params.id);
+  const [c] = await db.select().from(candidatesTable).where(eq(candidatesTable.id, id));
+  if (!c) { res.status(404).json({ error: "Candidate not found" }); return; }
+
+  // Must be allocated
+  if (c.status !== "allocated") {
+    res.status(400).json({ error: "Candidate must be allocated before sending an offer letter" });
+    return;
+  }
+
+  const [sub] = await db.select().from(applicationSubmissionsTable).where(eq(applicationSubmissionsTable.email, c.email));
+  const reviewNotes = sub?.reviewNotes || "";
+  
+  let specialization = "Fellowship";
+  if (reviewNotes.startsWith("Allocated to ")) {
+    specialization = reviewNotes.replace("Allocated to ", "");
+  }
+
+  const units = await db.select().from(unitsTable);
+  const unit = c.unitId ? units.find(u => u.id === c.unitId) : null;
+  const unitName = unit?.name || "Sankara Eye Hospital";
+
+  try {
+    await sendOfferLetterEmail({
+      toEmail: c.email,
+      toName: c.fullName,
+      candidateCode: c.candidateCode,
+      specialization,
+      unitName
+    });
+    
+    // Mark as sent in reviewNotes or similar (optional but good for UI)
+    const newNotes = reviewNotes + " [OFFER SENT]";
+    await db.update(applicationSubmissionsTable)
+      .set({ reviewNotes: newNotes })
+      .where(eq(applicationSubmissionsTable.email, c.email));
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("[email] Failed to send offer letter", e);
+    res.status(500).json({ error: "Failed to send email. Please check SMTP settings." });
+  }
 });
 
 export default router;
