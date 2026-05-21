@@ -43,3 +43,42 @@ export function parseSpecializationString(spec: string | null | undefined): stri
   
   return s.split(",").map((x) => x.trim()).filter(Boolean);
 }
+
+/**
+ * Robust Date of Birth standardizer to format incoming flexible date expressions as DD/MM/YYYY.
+ */
+export function formatDOBToStandard(dob: string | null | undefined): string {
+  if (!dob) return "N/A";
+  const s = String(dob).trim();
+  if (!s || s.toLowerCase() === "n/a" || s === "0") return "N/A";
+
+  const ymdRegex = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:T.*)?$/;
+  const dmyRegex = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/;
+
+  let match = s.match(ymdRegex);
+  if (match) {
+    const [_, year, month, day] = match;
+    return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year}`;
+  }
+
+  match = s.match(dmyRegex);
+  if (match) {
+    const [_, day, month, year] = match;
+    return `${day.padStart(2, "0")}/${month.padStart(2, "0")}/${year}`;
+  }
+
+  try {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      const day = String(d.getDate()).padStart(2, "0");
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const year = d.getFullYear();
+      return `${day}/${month}/${year}`;
+    }
+  } catch {
+    // ignore
+  }
+
+  return s;
+}
+

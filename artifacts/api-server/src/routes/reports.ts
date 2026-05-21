@@ -3,6 +3,7 @@ import { db, applicationSubmissionsTable, candidatesTable, usersTable, interview
 import { eq, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middleware/auth";
 import * as XLSX from "xlsx";
+import { formatDOBToStandard } from "../lib/utils";
 
 const router: Router = Router();
 
@@ -176,7 +177,7 @@ router.get("/reports/daily-report", requireAuth, requireRole("super_admin", "pro
         "Full Name": c.fullName,
         "Email": c.email,
         "Phone": c.phone || "N/A",
-        "DOB": c.dateOfBirth || "N/A",
+        "DOB": formatDOBToStandard(c.dateOfBirth),
         "Gender": c.gender || "N/A",
         "Qualification": c.qualification || "N/A",
         "College": c.collegeName || "N/A",

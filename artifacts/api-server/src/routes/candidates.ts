@@ -26,7 +26,8 @@ import { emailSettingsTable, applicationFormsTable, batchesTable, batchCandidate
 import PDFDocument from "pdfkit";
 import path from "path";
 import fs from "fs/promises";
-import { parseSpecializationString } from "../lib/utils";
+import { parseSpecializationString, formatDOBToStandard } from "../lib/utils";
+import * as XLSX from "xlsx";
 
 const router: Router = Router();
 
@@ -79,7 +80,7 @@ async function fullCandidate(c: typeof candidatesTable.$inferSelect) {
     totalScore,
     rank: alloc[0]?.rank ?? null,
     createdAt: c.createdAt.toISOString(),
-    dateOfBirth: c.dateOfBirth,
+    dateOfBirth: formatDOBToStandard(c.dateOfBirth),
     gender: c.gender,
     qualification: c.qualification,
     collegeName: c.collegeName,
@@ -230,6 +231,11 @@ router.get("/candidates", requireAuth, requireRole("super_admin", "program_admin
       totalScore: null,
       rank: null,
       createdAt: c.createdAt.toISOString(),
+      dateOfBirth: formatDOBToStandard(c.dateOfBirth),
+      gender: c.gender,
+      qualification: c.qualification,
+      collegeName: c.collegeName,
+      address: c.address,
       paymentInfo: (() => {
         const sub = allSubmissions.find(s => s.email?.toLowerCase() === c.email?.toLowerCase());
         if (!sub) return null;
@@ -258,6 +264,231 @@ router.get("/candidates", requireAuth, requireRole("super_admin", "program_admin
     };
   });
   res.json(out);
+});
+
+// ── Shared style constants for candidate export ────────────────────────────
+const HEADER_FONT  = { bold: true, color: { rgb: "FFFFFF" }, sz: 11, name: "Calibri" };
+const HEADER_ALIGN = { horizontal: "center", vertical: "center", wrapText: false };
+const ROW_EVEN     = { patternType: "solid", fgColor: { rgb: "E8F0FE" } }; // light blue
+const ROW_ODD      = { patternType: "solid", fgColor: { rgb: "FFFFFF" } }; // white
+const BODY_FONT    = { sz: 10, name: "Calibri" };
+const BODY_ALIGN   = { horizontal: "left", vertical: "center", wrapText: false };
+const THIN_BORDER  = {
+  top:    { style: "thin", color: { rgb: "C5D3E8" } },
+  bottom: { style: "thin", color: { rgb: "C5D3E8" } },
+  left:   { style: "thin", color: { rgb: "C5D3E8" } },
+  right:  { style: "thin", color: { rgb: "C5D3E8" } },
+};
+// Retina segment highlight fill
+const RETINA_FILL  = { patternType: "solid", fgColor: { rgb: "FFF3CD" } }; // amber-tinted
+const RETINA_FONT  = { sz: 10, name: "Calibri", color: { rgb: "7B3F00" }, bold: true };
+
+// Per-sheet header colour palette (one per sheet)
+const SHEET_HEADER_COLORS: Record<string, string> = {
+  "General":                "0B4A8F", // deep navy
+  "Cornea":                 "006064", // teal
+  "Glaucoma":               "311B92", // deep purple
+  "IOL Fellowship":         "1A237E", // indigo
+  "Medical Retina":         "880E4F", // deep pink
+  "Oculoplasty":            "BF360C", // deep orange
+  "Pediatric Ophthalmology":"1B5E20", // deep green
+  "Phaco Refractive":       "4A148C", // purple
+  "Vitreo Retina":          "B71C1C", // deep red
+};
+
+function buildStyledSheet(rows: Record<string, any>[], sheetName: string): XLSX.WorkSheet {
+  if (rows.length === 0) {
+    // Return an empty sheet with just headers
+    const ws = XLSX.utils.json_to_sheet([]);
+    return ws;
+  }
+
+  const headers = Object.keys(rows[0]);
+  const numCols = headers.length;
+  const numRows = rows.length;
+  const headerColor = SHEET_HEADER_COLORS[sheetName] ?? "0B4A8F";
+
+  // Build worksheet data array (header + data rows)
+  const wsData: any[][] = [headers, ...rows.map(r => headers.map(h => r[h] ?? ""))];
+  const ws: XLSX.WorkSheet = XLSX.utils.aoa_to_sheet(wsData);
+
+  // Apply cell styles
+  for (let R = 0; R <= numRows; R++) {
+    for (let C = 0; C < numCols; C++) {
+      const addr = XLSX.utils.encode_cell({ r: R, c: C });
+      if (!ws[addr]) continue;
+      const cell = ws[addr];
+
+      if (R === 0) {
+        // Header row
+        cell.s = {
+          fill:      { patternType: "solid", fgColor: { rgb: headerColor } },
+          font:      HEADER_FONT,
+          alignment: HEADER_ALIGN,
+          border:    THIN_BORDER,
+        };
+      } else {
+        // Data rows — highlight Retina/Anterior column cells
+        const colHeader = headers[C];
+        const cellVal   = String(cell.v ?? "");
+        const isRetina  = colHeader === "Retina/Anterior" && cellVal === "Retina";
+        cell.s = {
+          fill:      isRetina ? RETINA_FILL : (R % 2 === 0 ? ROW_ODD : ROW_EVEN),
+          font:      isRetina ? RETINA_FONT : BODY_FONT,
+          alignment: BODY_ALIGN,
+          border:    THIN_BORDER,
+        };
+      }
+    }
+  }
+
+  // Auto-fit column widths
+  ws["!cols"] = headers.map((h) => {
+    let maxLen = h.length;
+    for (const row of rows) {
+      const v = row[h];
+      if (v != null) maxLen = Math.max(maxLen, String(v).length);
+    }
+    return { wch: Math.min(maxLen + 4, 50) };
+  });
+
+  // Freeze header row
+  ws["!freeze"] = { xSplit: 0, ySplit: 1, topLeftCell: "A2", activePane: "bottomLeft", state: "frozen" };
+
+  // Auto-filter
+  ws["!autofilter"] = {
+    ref: XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: numCols - 1, r: numRows } }),
+  };
+
+  // Row height for header
+  ws["!rows"] = [{ hpt: 22 }, ...Array(numRows).fill({ hpt: 18 })];
+
+  return ws;
+}
+
+router.get("/candidates/export", requireAuth, requireRole("super_admin", "program_admin", "central_exam_coordinator"), async (req, res) => {
+  try {
+    const candidates = await db.select().from(candidatesTable)
+      .where(eq(candidatesTable.isMock, (req as any).isMockMode))
+      .orderBy(desc(candidatesTable.createdAt));
+
+    // Export ALL candidates (all statuses), not just approved
+    const units        = await db.select().from(unitsTable);
+    const allPrefs     = await db.select().from(candidatePreferencesTable);
+    const allSpecs     = await db.select().from(specialitiesTable);
+    const allSubmissions = await db.select().from(applicationSubmissionsTable);
+
+    const resolvedCandidates = candidates.map((c) => {
+      const unit  = c.unitId ? units.find((u) => u.id === c.unitId) : null;
+      const prefs = allPrefs
+        .filter((p) => p.candidateId === c.id)
+        .sort((a, b) => a.preferenceOrder - b.preferenceOrder);
+      let specializations = prefs
+        .map((p) => allSpecs.find((s) => s.id === p.specialityId)?.name ?? "")
+        .filter(Boolean);
+      if (specializations.length === 0) {
+        const sub = allSubmissions.find(s => s.email?.toLowerCase() === c.email?.toLowerCase());
+        if (sub?.specialization) specializations = parseSpecializationString(sub.specialization);
+      }
+      const submission = allSubmissions.find(s => s.email?.toLowerCase() === c.email?.toLowerCase());
+
+      return {
+        id: c.id,
+        candidateCode: c.candidateCode,
+        fullName:      c.fullName,
+        email:         c.email,
+        phone:         c.phone        || "N/A",
+        dateOfBirth:   formatDOBToStandard(c.dateOfBirth),
+        gender:        c.gender       || "N/A",
+        qualification: c.qualification || "N/A",
+        pgQualifications: submission?.pgQualifications || "N/A",
+        collegeName:   c.collegeName  || "N/A",
+        address:       c.address      || "N/A",
+        centerPreference: submission?.centerPreference || "N/A",
+        specializations,
+        status:        c.status,
+        unitName:      unit?.name     || "N/A",
+        paymentAmount: (() => {
+          if (!submission?.paidAmount) return "N/A";
+          const amt = submission.paidAmount > 100000 ? submission.paidAmount / 100 : submission.paidAmount;
+          return `Rs. ${amt.toLocaleString("en-IN")}`;
+        })(),
+        paymentMode:   submission?.paymentMode || "N/A",
+        createdAt:     c.createdAt ? new Date(c.createdAt).toLocaleDateString("en-IN") : "N/A",
+      };
+    });
+
+    const specOrder = [
+      "Cornea", "Glaucoma", "IOL Fellowship", "Medical Retina",
+      "Oculoplasty", "Pediatric Ophthalmology", "Phaco Refractive", "Vitreo Retina",
+    ];
+
+    // Status label map
+    const STATUS_LABELS: Record<string, string> = {
+      pending:              "Pending",
+      approved:             "Approved",
+      rejected:             "Rejected",
+      interview_completed:  "Interview Completed",
+      waitlisted:           "Waitlisted",
+      allocated:            "Allocated",
+    };
+
+    const mapToExcelRow = (rc: typeof resolvedCandidates[0]) => {
+      const specsString = rc.specializations.join(", ");
+      const hasRetina   = rc.specializations.some(s => s.toLowerCase().includes("retina"));
+      const hasBoth     = hasRetina && rc.specializations.some(s => !s.toLowerCase().includes("retina"));
+      const segment     = hasBoth ? "Anterior, Retina" : hasRetina ? "Retina" : "Anterior";
+      return {
+        "Candidate ID":     rc.candidateCode,
+        "Name":             rc.fullName,
+        "Email":            rc.email,
+        "Phone":            rc.phone,
+        "Date of Birth":    rc.dateOfBirth,
+        "Gender":           rc.gender,
+        "Qualification":    rc.qualification,
+        "PG Qualification": rc.pgQualifications,
+        "College":          rc.collegeName,
+        "Mailing Address":  rc.address,
+        "Specialities":     specsString,
+        "Retina/Anterior":  segment,
+        "Preferred Center": rc.centerPreference,
+        "Allotted Unit":    rc.unitName,
+        "Status":           STATUS_LABELS[rc.status] ?? rc.status,
+        "Payment Amount":   rc.paymentAmount,
+        "Payment Mode":     rc.paymentMode,
+        "Registration Date": rc.createdAt,
+      };
+    };
+
+    const wb = XLSX.utils.book_new();
+
+    // General sheet — all candidates
+    const generalRows = resolvedCandidates.map(mapToExcelRow);
+    const generalWs   = buildStyledSheet(generalRows, "General");
+    XLSX.utils.book_append_sheet(wb, generalWs, "General");
+
+    // One sheet per speciality — only approved candidates for speciality sheets
+    const approvedResolved = resolvedCandidates.filter(c => c.status === "approved");
+    for (const spec of specOrder) {
+      const specCandidates = approvedResolved.filter(rc =>
+        rc.specializations.some(s => {
+          const sN = s.toLowerCase(), spN = spec.toLowerCase();
+          return spN === "iol fellowship" ? (sN === "iol" || sN === "iol fellowship") : sN === spN;
+        })
+      );
+      const specRows = specCandidates.map(mapToExcelRow);
+      const specWs   = buildStyledSheet(specRows, spec);
+      XLSX.utils.book_append_sheet(wb, specWs, spec);
+    }
+
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx", cellStyles: true });
+    const today  = new Date().toISOString().split("T")[0];
+    res.setHeader("Content-Disposition", `attachment; filename="SAV_Candidates_${today}.xlsx"`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.send(buffer);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || "Failed to export candidates" });
+  }
 });
 
 router.get("/candidates/me", requireAuth, requireRole("student"), async (req, res) => {

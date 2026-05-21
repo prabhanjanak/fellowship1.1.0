@@ -36,7 +36,7 @@ import { eq } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import path from "path";
 import { requireAuth, requireRole } from "../middleware/auth";
-import { parseSpecializationString } from "../lib/utils";
+import { parseSpecializationString, formatDOBToStandard } from "../lib/utils";
 
 const router: IRouter = Router();
 
@@ -185,7 +185,7 @@ router.get(
       renderGeneralRow('Full Name', sub.fullName);
       renderGeneralRow('Email Address', sub.email);
       renderGeneralRow('Phone Number', sub.phone);
-      renderGeneralRow('Date of Birth', sub.dateOfBirth);
+      renderGeneralRow('Date of Birth', formatDOBToStandard(sub.dateOfBirth));
       renderGeneralRow('Permanent Address', sub.permanentAddress);
 
       drawSectionHeader('Qualifications');

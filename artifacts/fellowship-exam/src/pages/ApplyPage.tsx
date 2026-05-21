@@ -219,6 +219,39 @@ export default function ApplyPage({ token, isManualEntry }: { token: string; isM
 
   const onFileChange = (field: string, file: File | null) => {
     if (file) {
+      const lowerField = field.toLowerCase();
+      const lowerName = file.name.toLowerCase();
+      
+      if (lowerField.includes("lor")) {
+        // LOR must be PDF only, <= 5MB
+        const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
+        if (!isPdf) {
+          setErrors(prev => ({ ...prev, [field]: "LOR file must be in PDF format only" }));
+          return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+          setErrors(prev => ({ ...prev, [field]: "LOR file size exceeds 5MB limit" }));
+          return;
+        }
+      } else if (lowerField.includes("photo")) {
+        // Passport size photo must be JPG/JPEG only, <= 2MB
+        const isJpg = file.type === "image/jpeg" || file.type === "image/jpg" || lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg");
+        if (!isJpg) {
+          setErrors(prev => ({ ...prev, [field]: "Passport photo must be in JPG/JPEG format only" }));
+          return;
+        }
+        if (file.size > 2 * 1024 * 1024) {
+          setErrors(prev => ({ ...prev, [field]: "Passport photo size exceeds 2MB limit" }));
+          return;
+        }
+      } else {
+        // General files, <= 10MB
+        if (file.size > 10 * 1024 * 1024) {
+          setErrors(prev => ({ ...prev, [field]: "File size exceeds 10MB limit" }));
+          return;
+        }
+      }
+
       setFiles(prev => ({ ...prev, [field]: file }));
       setErrors(prev => {
          const next = { ...prev };
@@ -300,7 +333,6 @@ export default function ApplyPage({ token, isManualEntry }: { token: string; isM
       // 1. Upload files via correct two-step local upload route
       const uploadedUrls: Record<string, string> = {};
       for (const [field, file] of Object.entries(files)) {
-        // Step 1a: Request a signed upload URL
         const urlRes = await fetch(`${API}/apply/${token}/request-upload-url`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -309,6 +341,7 @@ export default function ApplyPage({ token, isManualEntry }: { token: string; isM
             contentType: file.type,
             size: file.size,
             candidateName: form.fullName || "candidate",
+            fieldName: field,
           }),
         });
         if (!urlRes.ok) {
@@ -721,9 +754,10 @@ export default function ApplyPage({ token, isManualEntry }: { token: string; isM
                      <div className={`relative border-2 border-dashed rounded-2xl p-10 transition-all ${files[field.id] ? 'border-emerald-400 bg-emerald-50/20' : errors[field.id] ? 'border-red-300 bg-red-50/20' : 'border-slate-200 hover:border-orange-500 hover:bg-orange-50/5 bg-slate-50/30'}`}>
                        <input
                          type="file"
+                         name={field.id}
                          onChange={(e) => onFileChange(field.id, e.target.files?.[0] || null)}
                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                         accept=".pdf,.jpg,.jpeg,.png"
+                         accept={field.id.toLowerCase().includes("lor") ? ".pdf" : field.id.toLowerCase().includes("photo") ? ".jpg,.jpeg" : ".pdf,.jpg,.jpeg,.png"}
                        />
                        <div className="text-center">
                          {files[field.id] ? (
@@ -740,7 +774,13 @@ export default function ApplyPage({ token, isManualEntry }: { token: string; isM
                                <Loader2 className="w-6 h-6 text-slate-400" />
                              </div>
                              <p className="text-sm font-medium text-slate-600">Click to upload or drag & drop</p>
-                             <p className="text-xs text-slate-400 mt-1">PDF or Image (Max 10MB)</p>
+                             <p className="text-xs text-slate-400 mt-1">
+                               {field.id.toLowerCase().includes("lor")
+                                 ? "PDF only (Max 5MB)"
+                                 : field.id.toLowerCase().includes("photo")
+                                   ? "JPG/JPEG only (Max 2MB)"
+                                   : "PDF or Image (Max 10MB)"}
+                             </p>
                            </>
                          )}
                        </div>
@@ -799,6 +839,8 @@ export default function ApplyPage({ token, isManualEntry }: { token: string; isM
                      </div>
                      <input
                        type="text"
+                       name={field.id}
+                       autoComplete="new-password"
                        value={form[field.id] || ""}
                        onChange={(e) => {
                          const val = e.target.value.replace(/\D/g, '').slice(0, 10);
@@ -813,6 +855,8 @@ export default function ApplyPage({ token, isManualEntry }: { token: string; isM
                  {field.type === 'text' && (
                    <input
                      type="text"
+                     name={field.id}
+                     autoComplete="new-password"
                      value={form[field.id] || ""}
                      onChange={(e) => set(field.id, e.target.value)}
                      className={`w-full px-4 py-3 rounded-lg border ${errors[field.id] ? 'border-red-500 shadow-sm shadow-red-100' : 'border-slate-200'} focus:ring-2 focus:ring-blue-500/20 focus:border-[#000080] transition-all outline-none`}
@@ -823,6 +867,8 @@ export default function ApplyPage({ token, isManualEntry }: { token: string; isM
                  {field.type === 'email' && (
                    <input
                      type="email"
+                     name={field.id}
+                     autoComplete="new-password"
                      value={form[field.id] || ""}
                      onChange={(e) => set(field.id, e.target.value)}
                      className={`w-full px-4 py-3 rounded-lg border ${errors[field.id] ? 'border-red-500 shadow-sm shadow-red-100' : 'border-slate-200'} focus:ring-2 focus:ring-blue-500/20 focus:border-[#000080] transition-all outline-none`}
@@ -832,6 +878,8 @@ export default function ApplyPage({ token, isManualEntry }: { token: string; isM
 
                  {field.type === 'textarea' && (
                    <textarea
+                     name={field.id}
+                     autoComplete="new-password"
                      value={form[field.id] || ""}
                      onChange={(e) => set(field.id, e.target.value)}
                      rows={4}

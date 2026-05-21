@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { requireAuth, requireRole } from "./middleware/auth";
 import { attachMockMode } from "./middleware/mock";
-import { parseSpecializationString } from "./lib/utils";
+import { parseSpecializationString, formatDOBToStandard } from "./lib/utils";
 
 const app: Express = express();
 app.use(attachMockMode);
@@ -181,7 +181,7 @@ app.get(
       renderGeneralRow('Full Name', sub.fullName);
       renderGeneralRow('Email Address', sub.email);
       renderGeneralRow('Phone Number', sub.phone);
-      renderGeneralRow('Date of Birth', sub.dateOfBirth);
+      renderGeneralRow('Date of Birth', formatDOBToStandard(sub.dateOfBirth));
       renderGeneralRow('Permanent Address', sub.permanentAddress);
 
       drawSectionHeader('Qualifications');

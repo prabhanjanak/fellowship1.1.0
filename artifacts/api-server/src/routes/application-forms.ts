@@ -11,7 +11,7 @@ import fs from "fs/promises";
 import { createWriteStream } from "fs";
 import path from "path";
 import PDFDocument from "pdfkit";
-import { parseSpecializationString } from "../lib/utils";
+import { parseSpecializationString, formatDOBToStandard } from "../lib/utils";
 
 const router: Router = Router();
 
@@ -170,7 +170,7 @@ router.get(
       renderGeneralRow('Full Name', sub.fullName);
       renderGeneralRow('Email Address', sub.email);
       renderGeneralRow('Phone Number', sub.phone);
-      renderGeneralRow('Date of Birth', sub.dateOfBirth);
+      renderGeneralRow('Date of Birth', formatDOBToStandard(sub.dateOfBirth));
       renderGeneralRow('Gender', (sub as any).gender);
       renderGeneralRow('Marital Status', sub.maritalStatus);
       renderGeneralRow('Permanent Address', sub.permanentAddress);
@@ -459,7 +459,7 @@ router.get(
         "Name in Full (First Name, Middle Name, Last/Family Name)": s.fullName,
         "E-mail (this would be the ID all communication would be shared on)": s.email,
         "Mobile Number (only 10 digits)": s.phone ?? "",
-        "Date of Birth": s.dateOfBirth ?? "",
+        "Date of Birth": formatDOBToStandard(s.dateOfBirth),
         "Marital Status": s.maritalStatus ?? "",
         "Permanent Address (including postal pin code)": s.permanentAddress ?? "",
         "Select 1 option from the dropbox": specString,
@@ -1574,18 +1574,36 @@ router.post("/apply/:token/request-upload-url", async (req, res) => {
   if (form.deadline && new Date() > form.deadline) {
     return res.status(410).json({ error: "The deadline for this form has passed" });
   }
-  const { name, contentType, size, candidateName } = (req.body ?? {}) as { name?: string; contentType?: string; size?: number; candidateName?: string };
+  const { name, contentType, size, candidateName, fieldName } = (req.body ?? {}) as { name?: string; contentType?: string; size?: number; candidateName?: string; fieldName?: string };
   if (!name || typeof name !== "string" || !name.trim() || !contentType || typeof contentType !== "string") {
     return res.status(400).json({ error: "Missing required fields: name, contentType" });
   }
-  const allowedTypes = ["application/pdf", "image/jpeg", "image/png", "image/jpg"];
-  if (!allowedTypes.includes(contentType)) {
-    return res.status(400).json({ error: "Only PDF, JPG, and PNG files are allowed" });
-  }
-  // LOR files (PDF): max 5 MB; passport photos (images): max 2 MB
-  const maxSize = contentType === "application/pdf" ? 5 * 1024 * 1024 : 2 * 1024 * 1024;
-  if (size && size > maxSize) {
-    return res.status(400).json({ error: `File too large. Maximum size: ${maxSize / 1024 / 1024} MB` });
+  const fName = (fieldName || "").toLowerCase();
+  if (fName.includes("lor")) {
+    if (contentType !== "application/pdf") {
+      return res.status(400).json({ error: "LOR files must be in PDF format only" });
+    }
+    const maxLorSize = 5 * 1024 * 1024;
+    if (size && size > maxLorSize) {
+      return res.status(400).json({ error: "LOR file size exceeds 5MB limit" });
+    }
+  } else if (fName.includes("photo")) {
+    if (contentType !== "image/jpeg" && contentType !== "image/jpg") {
+      return res.status(400).json({ error: "Passport photograph must be in JPG/JPEG format only" });
+    }
+    const maxPhotoSize = 2 * 1024 * 1024;
+    if (size && size > maxPhotoSize) {
+      return res.status(400).json({ error: "Passport photograph size exceeds 2MB limit" });
+    }
+  } else {
+    const allowedTypes = ["application/pdf", "image/jpeg", "image/png", "image/jpg"];
+    if (!allowedTypes.includes(contentType)) {
+      return res.status(400).json({ error: "Only PDF, JPG, and PNG files are allowed" });
+    }
+    const maxSize = 10 * 1024 * 1024;
+    if (size && size > maxSize) {
+      return res.status(400).json({ error: "File size exceeds 10MB limit" });
+    }
   }
   try {
     const isReplit = !!process.env.REPL_ID;

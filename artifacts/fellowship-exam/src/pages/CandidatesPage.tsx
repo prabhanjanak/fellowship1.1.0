@@ -300,6 +300,23 @@ export default function CandidatesPage() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const downloadApprovedCandidates = async () => {
+    try {
+      const blob = await api.getBlob("/candidates/export");
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `SAV_Candidates_${new Date().toISOString().split("T")[0]}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast({ title: "Export complete", description: "Candidates Excel file downloaded with colour-coded sheets." });
+    } catch (e: any) {
+      toast({ title: "Download failed", description: e.message, variant: "destructive" });
+    }
+  };
+
   const updateStatus = useMutation({
     mutationFn: ({ id, status, candidate }: { id: number; status: string; candidate: Candidate }) =>
       api.patch<Candidate>(`/candidates/${id}`, { status }),
@@ -509,13 +526,21 @@ export default function CandidatesPage() {
               </Button>
             )}
             {(isSuperAdmin || isCEC) && (
-              <Button 
-                variant="outline" 
-                onClick={openImportDialog}
-                className="bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-lg h-10 px-4 font-semibold shadow-sm gap-2"
-              >
-                <Upload className="h-4 w-4" /> Import Excel
-              </Button>
+              <>
+                <Button 
+                  variant="outline" 
+                  onClick={openImportDialog}
+                  className="bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-lg h-10 px-4 font-semibold shadow-sm gap-2"
+                >
+                  <Upload className="h-4 w-4" /> Import Excel
+                </Button>
+                <Button 
+                  onClick={downloadApprovedCandidates}
+                  className="bg-gradient-to-r from-slate-700 via-slate-800 to-slate-900 text-white hover:from-slate-800 hover:to-slate-950 transition-all shadow-md gap-2 border-none rounded-lg h-10 px-4 font-semibold"
+                >
+                  <Download className="h-4 w-4" /> Download Candidates Excel
+                </Button>
+              </>
             )}
             {canManage && (
               <Button 
