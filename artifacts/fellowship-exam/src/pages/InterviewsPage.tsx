@@ -261,9 +261,9 @@ function DoctorView({ toast, qc }: { toast: ReturnType<typeof import("../hooks/u
                 <div className="flex-1 border border-slate-200/80 rounded-2xl overflow-hidden bg-white shadow-sm relative">
                   {scoreOpen.submissionId ? (
                     <iframe 
-                      src={`/api/print-application/${scoreOpen.submissionId}?token=${localStorage.getItem("fellowship_token")}`} 
+                      src={`/api/submission-view/${scoreOpen.submissionId}?token=${localStorage.getItem("fellowship_token")}`} 
                       className="w-full h-full border-none" 
-                      title="Comprehensive Application Print View"
+                      title="Candidate Application Form"
                     />
                   ) : (
                     <div className="flex items-center justify-center h-full text-muted-foreground text-sm font-semibold">

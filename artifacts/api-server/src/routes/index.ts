@@ -35,6 +35,7 @@ import { db, applicationSubmissionsTable, applicationFormsTable, programsTable }
 import { eq } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import path from "path";
+import fs from "fs/promises";
 import { requireAuth, requireRole } from "../middleware/auth";
 import { parseSpecializationString, formatDOBToStandard } from "../lib/utils";
 
@@ -236,6 +237,293 @@ router.get(
     }
   }
 );
+
+// ─── Doctor Submission HTML View ─────────────────────────────────────────────
+// Returns the full application as a rich HTML page (not PDF).
+// This is what the doctor sees inside the scoring dialog iframe.
+router.get(
+  "/submission-view/:id",
+  requireAuth,
+  requireRole("super_admin", "program_admin", "central_exam_coordinator", "doctor"),
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (isNaN(id)) return res.status(400).send("<h1>Invalid ID</h1>");
+
+      const [sub] = await db.select().from(applicationSubmissionsTable).where(eq(applicationSubmissionsTable.id, id));
+      if (!sub) return res.status(404).send("<h1>Submission not found</h1>");
+
+      const [form] = await db.select().from(applicationFormsTable).where(eq(applicationFormsTable.id, sub.formId));
+
+      // Embed photo as base64 so it renders in sandboxed iframe
+      let photoDataUrl = "";
+      if (sub.photoUrl && sub.photoUrl.startsWith("/objects/")) {
+        try {
+          const localPath = path.join(process.cwd(), "uploads", sub.photoUrl.replace("/objects/", ""));
+          const buf = await fs.readFile(localPath);
+          const ext = localPath.split(".").pop()?.toLowerCase() || "jpg";
+          const mime = ext === "png" ? "image/png" : "image/jpeg";
+          photoDataUrl = `data:${mime};base64,${buf.toString("base64")}`;
+        } catch { /* photo not found — render placeholder */ }
+      }
+
+      const parseSpecs = (s: string | null | undefined): string[] => parseSpecializationString(s);
+
+      const fld = (val: any) => {
+        if (val === null || val === undefined || val === "" || val === "null") return "—";
+        if (typeof val === "boolean") return val ? "Yes" : "No";
+        return String(val);
+      };
+
+      // Traverse form config to build friendly labels map for custom fields
+      const fieldLabels: Record<string, string> = {};
+      const sectionsConfig: any[] = form?.sectionsConfig ?? [];
+      for (const sec of sectionsConfig) {
+        for (const f of sec.fields ?? []) {
+          if (f.id && f.label) {
+            fieldLabels[f.id] = f.label;
+          }
+        }
+      }
+
+      // 1. Personal Details Card
+      const personalRows: [string, any][] = [
+        ["Date of Birth", formatDOBToStandard(sub.dateOfBirth)],
+        ["Gender", sub.gender],
+        ["Marital Status", sub.maritalStatus],
+        ["Spouse / Family Details", sub.spouseDetails],
+        ["Mailing Address", sub.mailingAddress],
+        ["Permanent Address", sub.permanentAddress],
+      ];
+
+      // 2. Qualifications Card
+      const qualificationsRows: [string, any][] = [
+        ["Degree", sub.degree],
+        ["Medical College", sub.medicalCollege],
+        ["University", sub.university],
+        ["Medical Council Reg No.", sub.medicalCouncilNumber],
+        ["PG Qualifications", sub.pgQualifications],
+        ["DO Details", sub.doQualification ? sub.doDetails : null],
+        ["MS/MD Details", sub.msMdQualification ? sub.msMdDetails : null],
+        ["DNB Details", sub.dnbQualification ? sub.dnbDetails : null],
+        ["Other Training", sub.otherTraining],
+      ];
+
+      // 3. Clinical Profile Card
+      const clinicalRows: [string, any][] = [
+        ["Diagnostic Skills", sub.diagnosticSkills],
+        ["Surgical Experience", sub.surgicalExperience],
+        ["Total Surgeries Done", sub.totalSurgeries],
+      ];
+
+      // 4. Research Card
+      const researchRows: [string, any][] = [
+        ["Publications", sub.publications],
+        ["Presentations", sub.presentations],
+      ];
+
+      // 5. Additional / Referral Card
+      const referralRows: [string, any][] = [
+        ["Health Declaration", sub.healthDeclaration === "true" || sub.healthDetails || sub.medicalConditions ? `${sub.healthDeclaration === "true" ? "Yes" : "No"}${sub.healthDetails ? " | Details: " + sub.healthDetails : ""}${sub.medicalConditions ? " | Conditions: " + sub.medicalConditions : ""}` : null],
+        ["Referred By", sub.referredByName || sub.referralSource || sub.mediaSource ? `${[sub.referredByName, sub.referralSource, sub.mediaSource].filter(Boolean).join(" · ")}` : null],
+        ["Previous Applications", sub.previousApplicationMonthYear],
+        ["Other Information", sub.otherInformation],
+      ];
+
+      const createCardHtml = (title: string, rows: [string, any][]) => {
+        const filteredRows = rows.filter(([_, val]) => val !== null && val !== undefined && val !== "" && val !== "—");
+        if (filteredRows.length === 0) return "";
+
+        const trs = filteredRows.map(([label, val]) => `
+          <tr>
+            <td style="padding:10px 14px;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #f1f5f9;width:40%;vertical-align:top;">${label}</td>
+            <td style="padding:10px 14px;font-size:12px;font-weight:600;color:#0f172a;border-bottom:1px solid #f1f5f9;word-break:break-word;">${fld(val)}</td>
+          </tr>
+        `).join("");
+
+        return `
+          <div style="margin-bottom:20px;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.02);">
+            <div style="background:#f8fafc;padding:12px 16px;border-bottom:1px solid #e2e8f0;">
+              <span style="font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:0.1em;color:#334155;">${title}</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse;background:#fff;">${trs}</table>
+          </div>
+        `;
+      };
+
+      const personalCard = createCardHtml("Personal Details", personalRows);
+      const qualificationsCard = createCardHtml("Academic Qualifications", qualificationsRows);
+      const clinicalCard = createCardHtml("Clinical Skills & Surgical Profile", clinicalRows);
+      const researchCard = createCardHtml("Research & Academic Achievements", researchRows);
+      const referralCard = createCardHtml("Referral & Additional Profile Details", referralRows);
+
+      // 6. Custom Answers Card
+      const customRowsHtml: string[] = [];
+      const fd = (sub.formData as Record<string, any>) || {};
+      const ca = (sub.customAnswers as Record<string, any>) || {};
+      const allCustomEntries = { ...ca, ...fd };
+
+      for (const [key, val] of Object.entries(allCustomEntries)) {
+        if (val === null || val === undefined || val === "") continue;
+
+        // Skip standard keys that are already explicitly rendered above
+        const standardKeys = [
+          "fullName", "email", "phone", "dateOfBirth", "gender", "permanentAddress", "mailingAddress",
+          "degree", "medicalCollege", "university", "medicalCouncilNumber", "pgQualifications",
+          "diagnosticSkills", "surgicalExperience", "totalSurgeries", "publications", "presentations",
+          "lor1Url", "lor1RefName", "lor1RefContact", "lor1RefEmail",
+          "lor2Url", "lor2RefName", "lor2RefContact", "lor2RefEmail",
+          "photoUrl", "otherInformation", "maritalStatus", "spouseDetails", "doQualification", "doDetails",
+          "msMdQualification", "msMdDetails", "dnbQualification", "dnbDetails", "otherTraining",
+          "healthDeclaration", "healthDetails", "medicalConditions", "referredByName", "referralSource", "mediaSource",
+          "previousApplicationMonthYear"
+        ];
+        if (standardKeys.includes(key)) continue;
+
+        let displayVal = fld(val);
+        if (typeof val === "string" && (val.trim().startsWith("[") || val.trim().startsWith("{"))) {
+          try {
+            const parsed = JSON.parse(val.trim());
+            if (Array.isArray(parsed)) {
+              displayVal = parsed.join(", ");
+            } else if (typeof parsed === "object") {
+              displayVal = Object.entries(parsed).map(([k, v]) => `${k}: ${v}`).join(" | ");
+            }
+          } catch {}
+        }
+
+        const label = fieldLabels[key] || key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+        customRowsHtml.push(`
+          <tr>
+            <td style="padding:10px 14px;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #f1f5f9;width:40%;vertical-align:top;">${label}</td>
+            <td style="padding:10px 14px;font-size:12px;font-weight:600;color:#0f172a;border-bottom:1px solid #f1f5f9;word-break:break-word;">${displayVal}</td>
+          </tr>
+        `);
+      }
+
+      let customAnswersCard = "";
+      if (customRowsHtml.length > 0) {
+        customAnswersCard = `
+          <div style="margin-bottom:20px;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.02);">
+            <div style="background:#f8fafc;padding:12px 16px;border-bottom:1px solid #e2e8f0;">
+              <span style="font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:0.1em;color:#334155;">Custom Application Answers</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse;background:#fff;">${customRowsHtml.join("")}</table>
+          </div>
+        `;
+      }
+
+      const specs = parseSpecs(sub.specialization);
+      const specBadges = specs.map(s =>
+        `<span style="display:inline-block;padding:3px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:20px;font-size:11px;font-weight:800;color:#1d4ed8;margin:2px;">${s}</span>`
+      ).join(" ");
+
+      // LOR Block
+      const lorItems: string[] = [];
+      if (sub.lor1Url || sub.lor1RefName) {
+        lorItems.push(`
+          <div style="flex:1;min-width:260px;padding:16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,0.01);">
+            <div style="font-size:10px;font-weight:900;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Letter of Recommendation 1</div>
+            ${sub.lor1RefName ? `<div style="font-size:13px;font-weight:700;color:#0f172a;">${sub.lor1RefName}</div>` : ""}
+            ${sub.lor1RefContact ? `<div style="font-size:11px;color:#475569;margin-top:2px;">Contact: ${sub.lor1RefContact}</div>` : ""}
+            ${sub.lor1RefEmail ? `<div style="font-size:11px;color:#2563eb;margin-top:2px;">Email: ${sub.lor1RefEmail}</div>` : ""}
+            ${sub.lor1Url ? `<a href="${sub.lor1Url}" target="_blank" style="display:inline-flex;align-items:center;margin-top:10px;font-size:12px;font-weight:700;color:#2563eb;text-decoration:none;">📄 [View LOR 1 Document]</a>` : "<span style='font-size:11px;color:#94a3b8;display:block;margin-top:6px;'>No LOR document uploaded</span>"}
+          </div>
+        `);
+      }
+      if (sub.lor2Url || sub.lor2RefName) {
+        lorItems.push(`
+          <div style="flex:1;min-width:260px;padding:16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 1px 2px rgba(0,0,0,0.01);">
+            <div style="font-size:10px;font-weight:900;color:#64748b;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Letter of Recommendation 2</div>
+            ${sub.lor2RefName ? `<div style="font-size:13px;font-weight:700;color:#0f172a;">${sub.lor2RefName}</div>` : ""}
+            ${sub.lor2RefContact ? `<div style="font-size:11px;color:#475569;margin-top:2px;">Contact: ${sub.lor2RefContact}</div>` : ""}
+            ${sub.lor2RefEmail ? `<div style="font-size:11px;color:#2563eb;margin-top:2px;">Email: ${sub.lor2RefEmail}</div>` : ""}
+            ${sub.lor2Url ? `<a href="${sub.lor2Url}" target="_blank" style="display:inline-flex;align-items:center;margin-top:10px;font-size:12px;font-weight:700;color:#2563eb;text-decoration:none;">📄 [View LOR 2 Document]</a>` : "<span style='font-size:11px;color:#94a3b8;display:block;margin-top:6px;'>No LOR document uploaded</span>"}
+          </div>
+        `);
+      }
+
+      let lorSectionHtml = "";
+      if (lorItems.length > 0) {
+        lorSectionHtml = `
+          <div style="margin-bottom:20px;">
+            <div style="font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:0.1em;color:#475569;margin-bottom:10px;">Letters of Recommendation</div>
+            <div style="display:flex;flex-wrap:wrap;gap:14px;">${lorItems.join("")}</div>
+          </div>
+        `;
+      }
+
+      const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Application — ${sub.fullName}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #0f172a; }
+    a { color: #2563eb; }
+  </style>
+</head>
+<body>
+  <div style="max-width:860px;margin:0 auto;padding:20px;">
+
+    <!-- Header -->
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;padding-bottom:16px;border-bottom:3px solid #1d4ed8;margin-bottom:20px;">
+      <div>
+        <div style="font-size:22px;font-weight:900;color:#1d4ed8;text-transform:uppercase;letter-spacing:-0.5px;">Sankara Academy of Vision</div>
+        <div style="font-size:11px;font-weight:600;color:#64748b;margin-top:2px;">Educational unit of Sankara Eye Foundation, India</div>
+        <div style="font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.1em;margin-top:4px;">Fellowship Program — Applicant Dossier</div>
+      </div>
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-align:right;">
+        <div>Application ID: #${sub.id}</div>
+        <div style="margin-top:2px;">Submitted: ${sub.submittedAt ? new Date(sub.submittedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—"}</div>
+      </div>
+    </div>
+
+    <!-- Candidate Card: Photo + Name + Specializations -->
+    <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:20px;padding:16px;background:#fff;border-radius:14px;border:1px solid #e2e8f0;">
+      <div style="width:90px;height:110px;border:2px solid #e2e8f0;border-radius:8px;overflow:hidden;flex-shrink:0;background:#f1f5f9;display:flex;align-items:center;justify-content:center;">
+        ${photoDataUrl
+          ? `<img src="${photoDataUrl}" alt="Photo" style="width:100%;height:100%;object-fit:cover;" />`
+          : `<span style="font-size:9px;font-weight:700;color:#94a3b8;text-align:center;text-transform:uppercase;">No Photo</span>`
+        }
+      </div>
+      <div style="flex:1;">
+        <div style="font-size:20px;font-weight:900;color:#0f172a;letter-spacing:-0.3px;">${sub.fullName}</div>
+        <div style="font-size:12px;font-weight:600;color:#475569;margin-top:3px;">${fld(sub.email)}${sub.phone ? " · " + sub.phone : ""}</div>
+        ${sub.degree || sub.medicalCollege ? `<div style="font-size:11px;font-weight:700;color:#64748b;margin-top:4px;">${[sub.degree, sub.medicalCollege, sub.university].filter(Boolean).join(" · ")}</div>` : ""}
+        ${specs.length > 0 ? `<div style="margin-top:8px;">${specBadges}</div>` : ""}
+      </div>
+    </div>
+
+    ${lorSectionHtml}
+
+    ${personalCard}
+    ${qualificationsCard}
+    ${clinicalCard}
+    ${researchCard}
+    ${customAnswersCard}
+    ${referralCard}
+
+    <!-- Footer -->
+    <div style="margin-top:24px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:10px;color:#94a3b8;text-align:center;font-weight:600;">
+      CONFIDENTIAL — FOR PANEL USE ONLY · Sankara Academy of Vision · Fellowship Program ${new Date().getFullYear()}
+    </div>
+  </div>
+</body>
+</html>`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("X-Frame-Options", "SAMEORIGIN");
+      res.send(html);
+    } catch (e) {
+      console.error("[submission-view] error:", e);
+      if (!res.headersSent) res.status(500).send("<h1>Error generating view</h1>");
+    }
+  }
+);
+
 
 router.use(healthRouter);
 router.use(authRouter);
