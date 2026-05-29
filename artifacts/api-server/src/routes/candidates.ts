@@ -801,14 +801,22 @@ router.post("/candidates", requireAuth, requireRole("super_admin", "program_admi
 router.patch("/candidates/:candidateId/marks", requireAuth, requireRole("super_admin", "program_admin", "central_exam_coordinator"), async (req, res) => {
   try {
     const id = Number(req.params["candidateId"]);
-    const { mcqScore, psychometricScore, vivaScore, specialityId, panelId } = req.body as { 
+    const { mcqScore, psychometricScore, vivaScore, specialityId, panelId, targetDoctorId } = req.body as { 
       mcqScore?: number | null; 
       psychometricScore?: number | null; 
       vivaScore?: number | null;
       specialityId?: number | null;
-      panelId?: number | null 
+      panelId?: number | null;
+      targetDoctorId?: number | null;
     };
     
+    if (vivaScore !== undefined && vivaScore !== null) {
+      if (vivaScore < 0 || vivaScore > 50) {
+        res.status(400).json({ error: "VIVA score must be between 0 and 50." });
+        return;
+      }
+    }
+
     const update: Record<string, unknown> = {};
     if (mcqScore !== undefined) update["mcqScore"] = mcqScore !== null ? String(mcqScore) : null;
     if (psychometricScore !== undefined) update["psychometricScore"] = psychometricScore !== null ? String(psychometricScore) : null;
@@ -817,8 +825,12 @@ router.patch("/candidates/:candidateId/marks", requireAuth, requireRole("super_a
     if (!updated) { res.status(404).json({ error: "Not found" }); return; }
 
     // Update or insert direct VIVA score if provided
-    if (vivaScore !== undefined && vivaScore !== null) {
-      const docId = req.user!.userId;
+    if (vivaScore !== undefined) {
+      let docId = req.user!.userId;
+      if (targetDoctorId && (req.user!.role === "super_admin" || req.user!.role === "program_admin" || req.user!.role === "central_exam_coordinator")) {
+        docId = Number(targetDoctorId);
+      }
+
       // We map to the selected specialityId or fallback to the candidate's first preference
       let targetSpecId = specialityId;
       if (!targetSpecId) {
@@ -831,24 +843,34 @@ router.patch("/candidates/:candidateId/marks", requireAuth, requireRole("super_a
       }
 
       if (targetSpecId) {
-        const [existing] = await db.select().from(interviewScoresTable)
-          .where(and(
-            eq(interviewScoresTable.candidateId, id),
-            eq(interviewScoresTable.doctorId, docId),
-            eq(interviewScoresTable.specialityId, targetSpecId)
-          ));
-        if (existing) {
-          await db.update(interviewScoresTable)
-            .set({ score: vivaScore, submittedAt: new Date() })
-            .where(eq(interviewScoresTable.id, existing.id));
+        if (vivaScore === null) {
+          // Admin wants to clear/delete the score for this doctor
+          await db.delete(interviewScoresTable)
+            .where(and(
+              eq(interviewScoresTable.candidateId, id),
+              eq(interviewScoresTable.doctorId, docId),
+              eq(interviewScoresTable.specialityId, targetSpecId)
+            ));
         } else {
-          await db.insert(interviewScoresTable).values({
-            candidateId: id,
-            doctorId: docId,
-            specialityId: targetSpecId,
-            score: vivaScore,
-            remarks: "Coordinator Direct Entry"
-          });
+          const [existing] = await db.select().from(interviewScoresTable)
+            .where(and(
+              eq(interviewScoresTable.candidateId, id),
+              eq(interviewScoresTable.doctorId, docId),
+              eq(interviewScoresTable.specialityId, targetSpecId)
+            ));
+          if (existing) {
+            await db.update(interviewScoresTable)
+              .set({ score: vivaScore, submittedAt: new Date() })
+              .where(eq(interviewScoresTable.id, existing.id));
+          } else {
+            await db.insert(interviewScoresTable).values({
+              candidateId: id,
+              doctorId: docId,
+              specialityId: targetSpecId,
+              score: vivaScore,
+              remarks: "Coordinator Direct Entry"
+            });
+          }
         }
       }
     }

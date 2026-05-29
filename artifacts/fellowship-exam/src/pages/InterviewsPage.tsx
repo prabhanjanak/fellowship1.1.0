@@ -499,7 +499,7 @@ function AdminView({ toast, qc, isCEC }: { toast: ReturnType<typeof import("../h
 
       {/* ── MARK SHEET TAB ── */}
       {activeTab === "marksheet" && (
-        <MarkSheetTab specialities={specialities} candidates={candidates} scores={scores} isCEC={isCEC} toast={toast} />
+        <MarkSheetTab specialities={specialities} candidates={candidates} scores={scores} isCEC={isCEC} toast={toast} doctors={doctors} />
       )}
 
       {/* ── SCORES ── */}
@@ -1231,15 +1231,17 @@ function EditableCell({
 }
 
 /* ─── Premium Mark Sheet Tab Component ─── */
-function MarkSheetTab({ specialities, candidates, scores, isCEC, toast }: {
+function MarkSheetTab({ specialities, candidates, scores, isCEC, toast, doctors }: {
   specialities: { id: number; name: string; code: string }[];
   candidates: any[];
   scores: any[];
   isCEC: boolean;
   toast: any;
+  doctors: any[];
 }) {
   const [selectedSpec, setSelectedSpec] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState("");
+  const [vivaDialogOpen, setVivaDialogOpen] = useState<any | null>(null);
   const { user } = useAuth();
   const qc = useQueryClient();
 
@@ -1250,19 +1252,22 @@ function MarkSheetTab({ specialities, candidates, scores, isCEC, toast }: {
       candidateId, 
       mcqScore, 
       psychometricScore, 
-      vivaScore 
+      vivaScore,
+      targetDoctorId
     }: { 
       candidateId: number; 
       mcqScore?: number | null; 
       psychometricScore?: number | null; 
       vivaScore?: number | null; 
+      targetDoctorId?: number | null;
     }) => {
       const specId = selectedSpec !== "all" ? Number(selectedSpec) : null;
       return api.patch(`/candidates/${candidateId}/marks`, {
         mcqScore,
         psychometricScore,
         vivaScore,
-        specialityId: specId
+        specialityId: specId,
+        targetDoctorId
       });
     },
     onSuccess: () => {
@@ -1441,7 +1446,15 @@ function MarkSheetTab({ specialities, candidates, scores, isCEC, toast }: {
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-slate-700 font-semibold">
                   {filteredCandidates.map((c) => {
-                    const candScores = scores.filter(s => s.candidateId === c.id);
+                    const candSpecs = getSpecsArray(c);
+                    const targetAppSpecId = c.applications?.[0]?.specialityId;
+                    const targetPrefSpec = specialities.find(s => candSpecs.some(cs => cs.toLowerCase() === s.name.toLowerCase()));
+                    const currentSpecId = selectedSpec !== "all" ? Number(selectedSpec) : (targetAppSpecId ?? targetPrefSpec?.id);
+
+                    const candScores = scores.filter(s => 
+                      s.candidateId === c.id && 
+                      (currentSpecId ? s.specialityId === currentSpecId : true)
+                    );
                     const avgViva = candScores.length > 0
                       ? candScores.reduce((sum, s) => sum + s.score, 0) / candScores.length
                       : null;
@@ -1488,16 +1501,16 @@ function MarkSheetTab({ specialities, candidates, scores, isCEC, toast }: {
                         </td>
                         <td className="px-4 py-4 text-right">
                           <div className="flex flex-col items-end">
-                            <EditableCell
-                              value={avgViva}
-                              max={50}
-                              canEdit={canEdit}
-                              onSave={async (val) => {
-                                await updateScoreMutation.mutateAsync({ candidateId: c.id, vivaScore: val });
-                              }}
-                            />
+                            <div 
+                              onClick={() => setVivaDialogOpen(c)}
+                              className="inline-flex items-center gap-1.5 cursor-pointer hover:bg-orange-50 border border-dashed border-slate-250 hover:border-orange-300 hover:text-orange-700 px-2 py-1 rounded-lg transition-all font-mono font-bold text-xs"
+                              title="Click to view and edit doctor breakdown"
+                            >
+                              <span className="tabular-nums">{avgViva !== null ? avgViva.toFixed(1) : "—"}</span>
+                              <span className="text-[10px] text-slate-400 select-none">✏️</span>
+                            </div>
                             {candScores.length > 0 && (
-                              <span className="text-[9px] text-muted-foreground font-black uppercase tracking-wider mt-0.5">
+                              <span className="text-[9px] text-slate-450 font-bold uppercase tracking-wider mt-0.5">
                                 {candScores.length} {candScores.length === 1 ? "doc" : "docs"}
                               </span>
                             )}
@@ -1531,7 +1544,327 @@ function MarkSheetTab({ specialities, candidates, scores, isCEC, toast }: {
           )}
         </CardContent>
       </Card>
+
+      {/* ── VIVA Marks Breakdown & Auditor Modal ── */}
+      {vivaDialogOpen && (
+        <VivaScoresDialog
+          candidate={vivaDialogOpen}
+          open={!!vivaDialogOpen}
+          onClose={() => setVivaDialogOpen(null)}
+          scores={scores}
+          doctors={doctors}
+          selectedSpec={selectedSpec}
+          specialities={specialities}
+          updateScoreMutation={updateScoreMutation}
+        />
+      )}
     </div>
+  );
+}
+
+/* ─── Premium VIVA Marks Breakdown & Auditor Dialog Component ─── */
+function VivaScoresDialog({
+  candidate,
+  open,
+  onClose,
+  scores,
+  doctors,
+  selectedSpec,
+  specialities,
+  updateScoreMutation,
+}: {
+  candidate: any;
+  open: boolean;
+  onClose: () => void;
+  scores: any[];
+  doctors: any[];
+  selectedSpec: string;
+  specialities: any[];
+  updateScoreMutation: any;
+}) {
+  const [newDoctorId, setNewDoctorId] = useState<string>("");
+  const [newScore, setNewScore] = useState<string>("");
+  const [tempScores, setTempScores] = useState<Record<number, string>>({});
+  const [isSubmittingNew, setIsSubmittingNew] = useState(false);
+  const [savingDoctorId, setSavingDoctorId] = useState<number | null>(null);
+
+  // Determine the target specialityId for the candidate
+  const getSpecsArray = (c: any): string[] => {
+    if (!c.specializations) return [];
+    if (Array.isArray(c.specializations)) return c.specializations;
+    if (typeof c.specializations === "string") {
+      const s = c.specializations;
+      if (s.startsWith("{") || s.startsWith("[")) {
+        try {
+          const parsed = JSON.parse(s.replace(/^{|}$/g, (m: string) => m === "{" ? "[" : "]"));
+          if (Array.isArray(parsed)) return parsed.map(String);
+        } catch {}
+      }
+      return s.split(",").map((x: string) => x.trim()).filter(Boolean);
+    }
+    return [];
+  };
+
+  const candSpecs = getSpecsArray(candidate);
+  const targetAppSpecId = candidate.applications?.[0]?.specialityId;
+  const targetPrefSpec = specialities.find((s: any) => candSpecs.some((cs: string) => cs.toLowerCase() === s.name.toLowerCase()));
+  const specialityId = selectedSpec !== "all" ? Number(selectedSpec) : (targetAppSpecId ?? targetPrefSpec?.id);
+  const specialityName = specialities.find((s: any) => s.id === specialityId)?.name ?? "Speciality Interview";
+
+  // Filter existing scores for this candidate and speciality
+  const candidateScores = scores.filter(
+    (s) => s.candidateId === candidate.id && (specialityId ? s.specialityId === specialityId : true)
+  );
+
+  // Set up temporary scores state for editing inputs
+  useEffect(() => {
+    const initialTemp: Record<number, string> = {};
+    candidateScores.forEach((s) => {
+      initialTemp[s.doctorId] = String(s.score);
+    });
+    setTempScores(initialTemp);
+  }, [scores, candidate.id, specialityId]);
+
+  // Doctors who have already scored this candidate
+  const alreadyScoredDoctorIds = candidateScores.map((s) => s.doctorId);
+  // Remaining doctors who can be added
+  const remainingDoctors = doctors.filter((d) => !alreadyScoredDoctorIds.includes(d.doctorId));
+
+  const handleUpdateScore = async (doctorId: number) => {
+    const valStr = tempScores[doctorId]?.trim();
+    if (valStr === undefined || valStr === "") return;
+    const val = parseFloat(valStr);
+    if (isNaN(val) || val < 0 || val > 50) {
+      // Reset to original score
+      const original = candidateScores.find(s => s.doctorId === doctorId)?.score;
+      setTempScores(prev => ({ ...prev, [doctorId]: original !== undefined ? String(original) : "" }));
+      return;
+    }
+
+    // Skip update if value hasn't changed
+    const originalScore = candidateScores.find(s => s.doctorId === doctorId)?.score;
+    if (originalScore !== undefined && val === originalScore) {
+      return;
+    }
+
+    setSavingDoctorId(doctorId);
+    try {
+      await updateScoreMutation.mutateAsync({
+        candidateId: candidate.id,
+        vivaScore: val,
+        targetDoctorId: doctorId,
+        specialityId,
+      });
+    } catch {}
+    setSavingDoctorId(null);
+  };
+
+  const handleDeleteScore = async (doctorId: number, doctorName: string) => {
+    if (!window.confirm(`Are you sure you want to remove the VIVA score given by ${doctorName}?`)) {
+      return;
+    }
+    setSavingDoctorId(doctorId);
+    try {
+      await updateScoreMutation.mutateAsync({
+        candidateId: candidate.id,
+        vivaScore: null,
+        targetDoctorId: doctorId,
+        specialityId,
+      });
+    } catch {}
+    setSavingDoctorId(null);
+  };
+
+  const handleAddNewScore = async () => {
+    if (!newDoctorId || !newScore.trim()) return;
+    const val = parseFloat(newScore);
+    if (isNaN(val) || val < 0 || val > 50) return;
+
+    setIsSubmittingNew(true);
+    try {
+      await updateScoreMutation.mutateAsync({
+        candidateId: candidate.id,
+        vivaScore: val,
+        targetDoctorId: Number(newDoctorId),
+        specialityId,
+      });
+      setNewDoctorId("");
+      setNewScore("");
+    } catch {}
+    setIsSubmittingNew(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
+      <DialogContent className="max-w-xl rounded-2xl border-slate-100 shadow-xl bg-white p-6 gap-0">
+        <DialogHeader className="pb-4 border-b border-slate-100">
+          <DialogTitle className="text-slate-800 font-black text-lg flex items-center gap-2">
+            <Stethoscope className="h-5 w-5 text-orange-500" />
+            VIVA Score Breakdown
+          </DialogTitle>
+          <div className="mt-2.5 bg-slate-50 border border-slate-100 rounded-xl p-3 flex justify-between items-center text-xs">
+            <div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">Candidate</p>
+              <p className="font-bold text-slate-800 text-sm">{candidate.fullName}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-0.5">Specialization</p>
+              <Badge className="bg-orange-50 hover:bg-orange-100 text-orange-700 font-bold border-orange-200/50 rounded-md">
+                {specialityName}
+              </Badge>
+            </div>
+          </div>
+        </DialogHeader>
+
+        <div className="py-5 space-y-6 max-h-[350px] overflow-y-auto pr-1">
+          {/* List of existing doctor scores */}
+          <div className="space-y-3">
+            <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest leading-none mb-1">
+              Panel Evaluations ({candidateScores.length})
+            </h4>
+
+            {candidateScores.length === 0 ? (
+              <div className="text-center py-8 rounded-xl bg-slate-50/50 border border-dashed border-slate-200/60 text-muted-foreground text-xs font-semibold">
+                No doctor marks submitted for this candidate yet.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {candidateScores.map((s) => {
+                  const isSavingRow = savingDoctorId === s.doctorId;
+                  const isModified = tempScores[s.doctorId] !== undefined && tempScores[s.doctorId] !== String(s.score);
+
+                  return (
+                    <div 
+                      key={s.doctorId} 
+                      className="flex items-center justify-between p-3 rounded-xl border border-slate-100 bg-white transition-all shadow-sm hover:shadow-md"
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-bold text-slate-800 text-sm leading-snug">{s.doctorName}</span>
+                        <span className="text-[10px] font-medium text-slate-400">
+                          Evaluated: {new Date(s.submittedAt).toLocaleDateString()} {new Date(s.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {/* Score input field */}
+                        <div className="relative flex items-center">
+                          <Input
+                            type="number"
+                            step="0.5"
+                            min="0"
+                            max="50"
+                            className="w-20 h-9 font-mono font-bold text-right text-xs pr-7 border-slate-200 focus:ring-orange-500 rounded-lg"
+                            value={tempScores[s.doctorId] !== undefined ? tempScores[s.doctorId] : ""}
+                            onChange={(e) => setTempScores({ ...tempScores, [s.doctorId]: e.target.value })}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleUpdateScore(s.doctorId);
+                              if (e.key === "Escape") {
+                                setTempScores({ ...tempScores, [s.doctorId]: String(s.score) });
+                              }
+                            }}
+                            onBlur={() => handleUpdateScore(s.doctorId)}
+                            disabled={isSavingRow}
+                          />
+                          <span className="absolute right-2 text-[9px] font-black text-slate-400">/50</span>
+                        </div>
+
+                        {/* Save Button (only visible if modified) */}
+                        {isModified && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleUpdateScore(s.doctorId)}
+                            className="h-9 px-2.5 text-xs text-emerald-600 border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300 rounded-lg font-bold"
+                            disabled={isSavingRow}
+                          >
+                            Save
+                          </Button>
+                        )}
+
+                        {/* Delete Score Button */}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => handleDeleteScore(s.doctorId, s.doctorName)}
+                          className="h-9 w-9 text-slate-450 hover:text-red-650 hover:bg-red-50 rounded-lg transition-all shrink-0"
+                          disabled={isSavingRow}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Add a new doctor score directly */}
+          {remainingDoctors.length > 0 && (
+            <div className="pt-4 border-t border-slate-100 space-y-3">
+              <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest leading-none mb-1">
+                Record Mark for another Doctor
+              </h4>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                {/* Doctor Selection */}
+                <div className="flex-1 min-w-[180px]">
+                  <Select value={newDoctorId} onValueChange={setNewDoctorId}>
+                    <SelectTrigger className="h-9 rounded-lg bg-slate-50 border-slate-200 text-xs font-semibold text-slate-700">
+                      <SelectValue placeholder="Choose doctor..." />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl">
+                      {remainingDoctors.map((d) => (
+                        <SelectItem key={d.doctorId} value={String(d.doctorId)} className="text-xs font-semibold text-slate-755">
+                          {d.doctorName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Score Input */}
+                <div className="relative flex items-center w-full sm:w-28 shrink-0">
+                  <Input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    max="50"
+                    placeholder="Score"
+                    className="h-9 font-mono font-bold text-right text-xs pr-7 border-slate-200 focus:ring-orange-500 rounded-lg w-full"
+                    value={newScore}
+                    onChange={(e) => setNewScore(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleAddNewScore();
+                    }}
+                    disabled={isSubmittingNew}
+                  />
+                  <span className="absolute right-2 text-[9px] font-black text-slate-400">/50</span>
+                </div>
+
+                {/* Add button */}
+                <Button
+                  onClick={handleAddNewScore}
+                  className="h-9 px-4 bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs rounded-lg uppercase tracking-wider shrink-0"
+                  disabled={!newDoctorId || !newScore.trim() || isSubmittingNew}
+                >
+                  {isSubmittingNew ? "Adding..." : "Add"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="pt-4 border-t border-slate-100 flex items-center justify-end">
+          <Button 
+            onClick={onClose}
+            className="h-10 px-6 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs uppercase tracking-wider transition-all"
+          >
+            Close
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
