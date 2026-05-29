@@ -254,22 +254,22 @@ async function main() {
     await client.query("UPDATE interview_panels SET is_active = false WHERE name LIKE '%Test%'");
     
     const panel1Ins = await client.query(`
-      INSERT INTO interview_panels (name, room_number, is_active, speciality_id, is_mind_matter, created_at)
-      VALUES ('Test Glaucoma Panel', 'Room A-102', true, $1, false, NOW())
+      INSERT INTO interview_panels (name, room_number, is_active, speciality_id, is_mind_matter, is_mock, created_at)
+      VALUES ('Test Glaucoma Panel', 'Room A-102', true, $1, false, true, NOW())
       RETURNING id
     `, [glaucomaSpec.id]);
     const glaucomaPanelId = panel1Ins.rows[0].id;
 
     const panel2Ins = await client.query(`
-      INSERT INTO interview_panels (name, room_number, is_active, speciality_id, is_mind_matter, created_at)
-      VALUES ('Test Retina Panel', 'Room B-105', true, $1, false, NOW())
+      INSERT INTO interview_panels (name, room_number, is_active, speciality_id, is_mind_matter, is_mock, created_at)
+      VALUES ('Test Retina Panel', 'Room B-105', true, $1, false, true, NOW())
       RETURNING id
     `, [retinaSpec.id]);
     const retinaPanelId = panel2Ins.rows[0].id;
 
     const panel3Ins = await client.query(`
-      INSERT INTO interview_panels (name, room_number, is_active, speciality_id, is_mind_matter, created_at)
-      VALUES ('Test Mind Matter Station', 'Counseling Room 2', true, null, true, NOW())
+      INSERT INTO interview_panels (name, room_number, is_active, speciality_id, is_mind_matter, is_mock, created_at)
+      VALUES ('Test Mind Matter Station', 'Counseling Room 2', true, null, true, true, NOW())
       RETURNING id
     `, []);
     const mindMatterPanelId = panel3Ins.rows[0].id;
